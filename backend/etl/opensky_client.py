@@ -1,5 +1,7 @@
 import time
+import logging
 import requests
+logger = logging.getLogger(__name__)
 
 TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 STATES_URL = "https://opensky-network.org/api/states/all"
@@ -21,6 +23,7 @@ class OpenSkyClient:
         response.raise_for_status()      
 
         states = response.json()["states"] or []
+        logger.info(f"{len(states)} aircraft, {response.headers.get('X-Rate-Limit-Remaining')} credits left.")
         return states             
 
     def get_token(self):
@@ -31,7 +34,7 @@ class OpenSkyClient:
 
     def _refresh(self):
         '''Fetch a new access token from the OpenSky Authentication Server'''
-        print("Fetching new token")
+        logger.info("Requesting new access token")
         response = self.session.post(TOKEN_URL, data={
                     "grant_type": "client_credentials",
                     "client_id": self.client_id,
@@ -42,5 +45,6 @@ class OpenSkyClient:
         data = response.json()
         self.token = data["access_token"]
         expires_in = data.get("expires_in", 1800)
+        logger.info(f"Got new access token, valid for {expires_in}s")
         self.token_expires_at = time.monotonic() + expires_in - 30
         return self.token
