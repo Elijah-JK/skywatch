@@ -11,7 +11,7 @@ class OpenSkyClient:
         self.client_id = client_id
         self.client_secret = client_secret
         self.session = requests.Session()
-        self.token = None
+        self.token = "None"
         self.token_expires_at = None
 
     def close(self):
@@ -19,12 +19,37 @@ class OpenSkyClient:
     
     def get_states(self, lamin, lomin, lamax, lomax) -> list[list]:
         params = {"lamin": lamin, "lomin": lomin, "lamax": lamax, "lomax": lomax}
-        response = self.session.get(STATES_URL, params=params, headers={"Authorization": f"Bearer {self.get_token()}"}, timeout=30)
-        response.raise_for_status()      
+        for attempt in range(4):
+            try:
+                response = self.session.get(STATES_URL, params=params, headers={"Authorization": f"Bearer {self.get_token()}"}, timeout=30)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                logger.warning(f"Request failed ({type(e).__name__}) on attempt {attempt + 1}/4, retrying in {2 ** attempt}s")
+                time.sleep(2 ** attempt)
+                continue
+            if response.status_code == 200:    
+                states = response.json()["states"] or []
+                logger.info(f"{len(states)} aircraft, {response.headers.get('X-Rate-Limit-Remaining')} credits left.")
+                return states
+            elif response.status_code == 401:
+                logger.warning(f"Token was rejected (attempt {attempt + 1}/4), refreshing") 
+                self._refresh()       
+                continue
+            elif response.status_code == 429:
+                wait = int(response.headers.get('X-Rate-Limit-Retry-After-Seconds', 60))
+                logger.warning(f"Rate Limited (429), retrying in {wait}s")
+                time.sleep(wait)
+                continue
+            elif response.status_code >= 500:
+                logger.warning(f"Server error {response.status_code} (attempt {attempt + 1}/4), retrying in {2 ** attempt}s")
+                time.sleep(2 ** attempt)
+                continue
+            else:
+                logger.error(f"Request failed with {response.status_code}: {response.text}")
+                response.raise_for_status()
+        raise RuntimeError(f"OpenSky request failed after 4 attempts")
+            
 
-        states = response.json()["states"] or []
-        logger.info(f"{len(states)} aircraft, {response.headers.get('X-Rate-Limit-Remaining')} credits left.")
-        return states             
+
 
     def get_token(self):
         '''Return a valid access token, refreshing automatically if needed'''
